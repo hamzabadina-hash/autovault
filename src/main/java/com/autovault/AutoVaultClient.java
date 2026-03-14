@@ -24,6 +24,9 @@ import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+
 @Environment(EnvType.CLIENT)
 public class AutoVaultClient implements ClientModInitializer {
 
@@ -35,17 +38,19 @@ public class AutoVaultClient implements ClientModInitializer {
     private static boolean hasInteractedThisCycle = false;
     private static String lastPreviewItemId = "";
 
+    private static Field sharedDataField = null;
+    private static Method getDisplayItemMethod = null;
+    private static boolean reflectionInitialized = false;
+
     @Override
     public void onInitializeClient() {
-        LOGGER.info("AutoVault client initializing...");
-
+        LOGGER.info("AutoVault initializing...");
         toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
                 "key.autovault.toggle",
                 InputUtil.Type.KEYSYM,
                 GLFW.GLFW_KEY_G,
                 "category.autovault"
         ));
-
         ClientTickEvents.END_CLIENT_TICK.register(this::onClientTick);
         LOGGER.info("AutoVault ready! Press G to toggle ON/OFF.");
     }
@@ -57,11 +62,12 @@ public class AutoVaultClient implements ClientModInitializer {
             modEnabled = !modEnabled;
             hasInteractedThisCycle = false;
             lastPreviewItemId = "";
-
             if (modEnabled) {
                 client.player.sendMessage(Text.literal("AutoVault: ON").formatted(Formatting.GREEN), true);
+                LOGGER.info("AutoVault enabled.");
             } else {
                 client.player.sendMessage(Text.literal("AutoVault: OFF").formatted(Formatting.RED), true);
+                LOGGER.info("AutoVault disabled.");
             }
         }
 
@@ -69,8 +75,7 @@ public class AutoVaultClient implements ClientModInitializer {
 
         HitResult hitResult = client.crosshairTarget;
         if (hitResult == null || hitResult.getType() != HitResult.Type.BLOCK) {
-            resetCycleIfNeeded("");
-            return;
+            resetCycleIfNeeded(""); return;
         }
 
         BlockHitResult blockHit = (BlockHitResult) hitResult;
@@ -79,42 +84,89 @@ public class AutoVaultClient implements ClientModInitializer {
 
         BlockEntity blockEntity = world.getBlockEntity(targetPos);
         if (!(blockEntity instanceof VaultBlockEntity vault)) {
-            resetCycleIfNeeded("");
-            return;
+            resetCycleIfNeeded(""); return;
         }
 
-        ItemStack previewItem = getVaultPreviewItem(vault);
+        ItemStack previewItem = getVaultDisplayItemSafely(vault);
         if (previewItem == null || previewItem.isEmpty()) {
-            resetCycleIfNeeded("");
-            return;
+            resetCycleIfNeeded(""); return;
         }
 
         if (!previewItem.isOf(Items.HEAVY_CORE)) {
-            resetCycleIfNeeded(previewItem.getItem().toString());
-            return;
+            resetCycleIfNeeded(previewItem.getItem().toString()); return;
         }
 
         String currentItemId = previewItem.getItem().toString();
         if (hasInteractedThisCycle && currentItemId.equals(lastPreviewItemId)) return;
-
         if (!playerHasTrialKey(client)) return;
 
-        LOGGER.info("AutoVault: Heavy Core detected at {}. Interacting...", targetPos);
+        LOGGER.info("AutoVault: Heavy Core at {}! Interacting.", targetPos);
         client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, blockHit);
-
         hasInteractedThisCycle = true;
         lastPreviewItemId = currentItemId;
     }
 
-    private ItemStack getVaultPreviewItem(VaultBlockEntity vault) {
+    private ItemStack getVaultDisplayItemSafely(VaultBlockEntity vault) {
         try {
-            var sharedData = vault.getSharedData();
+            if (!reflectionInitialized) initReflection(vault);
+            if (sharedDataField == null || getDisplayItemMethod == null) return ItemStack.EMPTY;
+            Object sharedData = sharedDataField.get(vault);
             if (sharedData == null) return ItemStack.EMPTY;
-            return sharedData.getDisplayItem();
+            Object result = getDisplayItemMethod.invoke(sharedData);
+            if (result instanceof ItemStack stack) return stack;
+            return ItemStack.EMPTY;
         } catch (Exception e) {
-            LOGGER.warn("AutoVault: Could not read vault preview item: {}", e.getMessage());
             return ItemStack.EMPTY;
         }
+    }
+
+    private void initReflection(VaultBlockEntity vault) {
+        reflectionInitialized = true;
+        try {
+            for (Field field : VaultBlockEntity.class.getDeclaredFields()) {
+                field.setAccessible(true);
+                Object value = null;
+                try { value = field.get(vault); } catch (Exception ignored) {}
+                if (value == null) continue;
+                for (Method method : value.getClass().getMethods()) {
+                    if (method.getParameterCount() == 0
+                            && method.getReturnType() == ItemStack.class
+                            && method.getName().toLowerCase().contains("display")) {
+                        sharedDataField = field;
+                        getDisplayItemMethod = method;
+                        LOGGER.info("AutoVault: Found via {}.{}", value.getClass().getSimpleName(), method.getName());
+                        return;
+                    }
+                }
+            }
+            for (String name : new String[]{"sharedData", "field_53026", "shared", "data"}) {
+                if (tryFieldByName(vault, name)) return;
+            }
+            LOGGER.warn("AutoVault: Could not locate vault preview field — mod will not crash but won't auto-interact.");
+        } catch (Exception e) {
+            LOGGER.warn("AutoVault: Reflection init error: {}", e.getMessage());
+        }
+    }
+
+    private boolean tryFieldByName(VaultBlockEntity vault, String name) {
+        try {
+            Field field = VaultBlockEntity.class.getDeclaredField(name);
+            field.setAccessible(true);
+            Object value = field.get(vault);
+            if (value == null) return false;
+            for (Method method : value.getClass().getMethods()) {
+                if (method.getParameterCount() == 0 && method.getReturnType() == ItemStack.class) {
+                    sharedDataField = field;
+                    getDisplayItemMethod = method;
+                    LOGGER.info("AutoVault: Resolved via field '{}' method '{}'", name, method.getName());
+                    return true;
+                }
+            }
+        } catch (NoSuchFieldException ignored) {
+        } catch (Exception e) {
+            LOGGER.warn("AutoVault: tryFieldByName('{}') error: {}", name, e.getMessage());
+        }
+        return false;
     }
 
     private boolean playerHasTrialKey(MinecraftClient client) {
