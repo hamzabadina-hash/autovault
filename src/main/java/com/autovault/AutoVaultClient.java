@@ -40,10 +40,10 @@ public class AutoVaultClient implements ClientModInitializer {
     private static boolean hasInteractedThisCycle = false;
     private static String lastPreviewItemId = "";
 
-    private static Field sharedDataField = null;
-    private static Method getDisplayItemMethod = null;
+    private static final List<FieldMethodPair> candidates = new ArrayList<>();
     private static boolean reflectionInitialized = false;
-    private static List<Method> directItemStackMethods = null;
+
+    private record FieldMethodPair(Field field, Method method, String desc) {}
 
     @Override
     public void onInitializeClient() {
@@ -90,7 +90,12 @@ public class AutoVaultClient implements ClientModInitializer {
             resetCycleIfNeeded(""); return;
         }
 
+        if (!reflectionInitialized) {
+            initReflection(vault);
+        }
+
         ItemStack previewItem = getVaultDisplayItem(vault);
+
         if (previewItem == null || previewItem.isEmpty()) {
             resetCycleIfNeeded(""); return;
         }
@@ -110,81 +115,69 @@ public class AutoVaultClient implements ClientModInitializer {
     }
 
     private ItemStack getVaultDisplayItem(VaultBlockEntity vault) {
-        if (!reflectionInitialized) initReflection(vault);
-
-        if (sharedDataField != null && getDisplayItemMethod != null) {
+        for (FieldMethodPair pair : candidates) {
             try {
-                Object sharedData = sharedDataField.get(vault);
-                if (sharedData != null) {
-                    Object result = getDisplayItemMethod.invoke(sharedData);
-                    if (result instanceof ItemStack stack && !stack.isEmpty()) return stack;
+                Object fieldValue = pair.field().get(vault);
+                if (fieldValue == null) continue;
+                Object result = pair.method().invoke(fieldValue);
+                if (result instanceof ItemStack stack && !stack.isEmpty()) {
+                    return stack;
                 }
             } catch (Exception ignored) {}
         }
-
-        if (directItemStackMethods != null) {
-            for (Method m : directItemStackMethods) {
-                try {
-                    Object result = m.invoke(vault);
-                    if (result instanceof ItemStack stack && !stack.isEmpty()) return stack;
-                } catch (Exception ignored) {}
-            }
-        }
-
         return ItemStack.EMPTY;
     }
 
     private void initReflection(VaultBlockEntity vault) {
         reflectionInitialized = true;
-        LOGGER.info("AutoVault: Scanning VaultBlockEntity fields...");
+        LOGGER.info("AutoVault: Scanning ALL VaultBlockEntity fields for ItemStack getters...");
 
         Field[] fields = VaultBlockEntity.class.getDeclaredFields();
-        LOGGER.info("AutoVault: {} declared fields found", fields.length);
+        LOGGER.info("AutoVault: {} declared fields total", fields.length);
 
         for (Field field : fields) {
             field.setAccessible(true);
             Object value = null;
             try { value = field.get(vault); } catch (Exception ignored) {}
-            LOGGER.info("AutoVault: field='{}' type='{}' value='{}'",
+
+            LOGGER.info("AutoVault: Checking field='{}' type='{}' value='{}'",
                     field.getName(), field.getType().getSimpleName(),
                     value == null ? "null" : value.getClass().getSimpleName());
+
             if (value == null) continue;
 
-            // Check declared methods (catches obfuscated names like method_XXXXX)
             for (Method method : value.getClass().getDeclaredMethods()) {
                 method.setAccessible(true);
                 if (method.getParameterCount() == 0 && method.getReturnType() == ItemStack.class) {
-                    LOGGER.info("AutoVault: Candidate found - field='{}' method='{}'", field.getName(), method.getName());
-                    sharedDataField = field;
-                    getDisplayItemMethod = method;
-                    return;
+                    LOGGER.info("AutoVault: + declared method '{}' on field '{}'", method.getName(), field.getName());
+                    candidates.add(new FieldMethodPair(field, method, field.getName() + "." + method.getName()));
                 }
             }
-            // Also check inherited public methods
             for (Method method : value.getClass().getMethods()) {
                 if (method.getParameterCount() == 0 && method.getReturnType() == ItemStack.class) {
-                    LOGGER.info("AutoVault: Public candidate - field='{}' method='{}'", field.getName(), method.getName());
-                    sharedDataField = field;
-                    getDisplayItemMethod = method;
-                    return;
+                    boolean alreadyAdded = candidates.stream().anyMatch(
+                            p -> p.field() == field && p.method().getName().equals(method.getName()));
+                    if (!alreadyAdded) {
+                        LOGGER.info("AutoVault: + public method '{}' on field '{}'", method.getName(), field.getName());
+                        candidates.add(new FieldMethodPair(field, method, field.getName() + "." + method.getName()));
+                    }
+                }
+            }
+
+            for (Field innerField : value.getClass().getDeclaredFields()) {
+                innerField.setAccessible(true);
+                Object innerValue = null;
+                try { innerValue = innerField.get(value); } catch (Exception ignored) {}
+                if (innerValue == null) continue;
+                LOGGER.info("AutoVault:   inner field='{}' type='{}' value='{}'",
+                        innerField.getName(), innerField.getType().getSimpleName(),
+                        innerValue.getClass().getSimpleName());
+                if (innerValue instanceof ItemStack) {
+                    LOGGER.info("AutoVault:   -> direct ItemStack field: {}.{}", field.getName(), innerField.getName());
                 }
             }
         }
-
-        // Fallback: direct methods on VaultBlockEntity
-        LOGGER.info("AutoVault: Trying direct VaultBlockEntity methods...");
-        directItemStackMethods = new ArrayList<>();
-        for (Method method : VaultBlockEntity.class.getDeclaredMethods()) {
-            method.setAccessible(true);
-            if (method.getParameterCount() == 0 && method.getReturnType() == ItemStack.class) {
-                directItemStackMethods.add(method);
-                LOGGER.info("AutoVault: Direct method: '{}'", method.getName());
-            }
-        }
-
-        if (sharedDataField == null && directItemStackMethods.isEmpty()) {
-            LOGGER.warn("AutoVault: No ItemStack getter found! Preview detection disabled.");
-        }
+        LOGGER.info("AutoVault: Found {} total candidates", candidates.size());
     }
 
     private boolean playerHasTrialKey(MinecraftClient client) {
