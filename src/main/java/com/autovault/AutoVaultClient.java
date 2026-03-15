@@ -39,6 +39,15 @@ public class AutoVaultClient implements ClientModInitializer {
     private static boolean hasInteractedThisCycle = false;
     private static String lastPreviewItemId = "";
 
+    // Action bar animation
+    private static int animTick = 0;
+    private static final String[] DOTS = {"   ", ".  ", ".. ", "..."};
+
+    // One-time chat flags
+    private static boolean sentVaultMessage = false;
+    private static boolean sentHeavyCoreMessage = false;
+    private static BlockPos lastVaultPos = null;
+
     private static final List<Field[]> fieldPairs = new ArrayList<>();
     private static boolean reflectionInitialized = false;
 
@@ -55,23 +64,39 @@ public class AutoVaultClient implements ClientModInitializer {
         LOGGER.info("AutoVault ready! Press G to toggle ON/OFF.");
     }
 
+    private void chat(MinecraftClient client, String msg, Formatting color) {
+        if (client.player != null) {
+            client.player.sendMessage(Text.literal(msg).formatted(color), false);
+        }
+    }
+
     private void actionBar(MinecraftClient client, String msg, Formatting color) {
         if (client.player != null) {
-            client.player.sendMessage(Text.literal("[AV] " + msg).formatted(color), true);
+            client.player.sendMessage(Text.literal(msg).formatted(color), true);
         }
     }
 
     private void onClientTick(MinecraftClient client) {
         if (client.player == null || client.world == null) return;
 
+        animTick++;
+
         while (toggleKey.wasPressed()) {
             modEnabled = !modEnabled;
             hasInteractedThisCycle = false;
             lastPreviewItemId = "";
+            sentVaultMessage = false;
+            sentHeavyCoreMessage = false;
+            lastVaultPos = null;
             if (modEnabled) {
-                actionBar(client, "ON", Formatting.GREEN);
+                chat(client, "━━━━━━━━━━━━━━━━━━━━━━━", Formatting.DARK_AQUA);
+                chat(client, "  AutoVault » ON", Formatting.GREEN);
+                chat(client, "  Look at an Ominous Vault!", Formatting.GRAY);
+                chat(client, "━━━━━━━━━━━━━━━━━━━━━━━", Formatting.DARK_AQUA);
             } else {
-                actionBar(client, "OFF", Formatting.RED);
+                chat(client, "━━━━━━━━━━━━━━━━━━━━━━━", Formatting.DARK_AQUA);
+                chat(client, "  AutoVault » OFF", Formatting.RED);
+                chat(client, "━━━━━━━━━━━━━━━━━━━━━━━", Formatting.DARK_AQUA);
             }
         }
 
@@ -79,6 +104,12 @@ public class AutoVaultClient implements ClientModInitializer {
 
         HitResult hitResult = client.crosshairTarget;
         if (hitResult == null || hitResult.getType() != HitResult.Type.BLOCK) {
+            // Reset when not looking at vault
+            if (sentVaultMessage) {
+                sentVaultMessage = false;
+                sentHeavyCoreMessage = false;
+                lastVaultPos = null;
+            }
             resetCycleIfNeeded("");
             return;
         }
@@ -89,14 +120,34 @@ public class AutoVaultClient implements ClientModInitializer {
 
         BlockEntity blockEntity = world.getBlockEntity(targetPos);
         if (!(blockEntity instanceof VaultBlockEntity vault)) {
+            if (sentVaultMessage) {
+                sentVaultMessage = false;
+                sentHeavyCoreMessage = false;
+                lastVaultPos = null;
+            }
             resetCycleIfNeeded("");
             return;
+        }
+
+        // Send "Looking at vault" message only once per new vault
+        if (!sentVaultMessage || !targetPos.equals(lastVaultPos)) {
+            sentVaultMessage = true;
+            sentHeavyCoreMessage = false;
+            lastVaultPos = targetPos;
+            chat(client, "━━━━━━━━━━━━━━━━━━━━━━━", Formatting.DARK_GRAY);
+            chat(client, "  AutoVault » Looking at vault" , Formatting.AQUA);
+            chat(client, "  Scanning preview items" + DOTS[animTick / 5 % 4], Formatting.GRAY);
+            chat(client, "━━━━━━━━━━━━━━━━━━━━━━━", Formatting.DARK_GRAY);
         }
 
         if (!reflectionInitialized) initReflection(vault);
 
         ItemStack previewItem = getVaultDisplayItem(vault);
         String currentId = (previewItem == null || previewItem.isEmpty()) ? "" : previewItem.getItem().toString();
+
+        // Animated action bar while scanning
+        String dot = DOTS[animTick / 5 % 4];
+        actionBar(client, "⬡ AutoVault » Scanning" + dot, Formatting.AQUA);
 
         if (previewItem == null || previewItem.isEmpty()) {
             resetCycleIfNeeded("");
@@ -108,19 +159,27 @@ public class AutoVaultClient implements ClientModInitializer {
             return;
         }
 
-        // Heavy Core detected
+        // Heavy Core — send chat once
+        if (!sentHeavyCoreMessage) {
+            sentHeavyCoreMessage = true;
+            chat(client, "━━━━━━━━━━━━━━━━━━━━━━━", Formatting.GOLD);
+            chat(client, "  ⚠ HEAVY CORE DETECTED!", Formatting.GOLD);
+            chat(client, "━━━━━━━━━━━━━━━━━━━━━━━", Formatting.GOLD);
+        }
+
         if (hasInteractedThisCycle && currentId.equals(lastPreviewItemId)) {
-            actionBar(client, "Heavy Core detected - already clicked!", Formatting.GOLD);
+            actionBar(client, "⬡ AutoVault » Already clicked this cycle!", Formatting.GOLD);
             return;
         }
 
         if (!playerHasTrialKey(client)) {
-            actionBar(client, "Heavy Core detected - no Ominous Key!", Formatting.RED);
+            actionBar(client, "⬡ AutoVault » No Ominous Key!", Formatting.RED);
             return;
         }
 
         // Fire!
-        actionBar(client, "Heavy Core - clicking vault!", Formatting.GREEN);
+        actionBar(client, "⬡ AutoVault » Clicking vault!", Formatting.GREEN);
+        chat(client, "  ✔ Vault clicked!", Formatting.GREEN);
         LOGGER.info("AutoVault: Interacting with vault at {}", targetPos);
         client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, blockHit);
         hasInteractedThisCycle = true;
@@ -178,3 +237,33 @@ public class AutoVaultClient implements ClientModInitializer {
         }
     }
 }
+```
+
+Commit → ✅ → download jar.
+
+Here's what you'll see:
+
+**When you press G:**
+```
+━━━━━━━━━━━━━━━━━━━━━━━
+  AutoVault » ON
+  Look at an Ominous Vault!
+━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+**When you look at a vault (once):**
+```
+━━━━━━━━━━━━━━━━━━━━━━━
+  AutoVault » Looking at vault
+  Scanning preview items...
+━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+**Action bar animates:** `⬡ AutoVault » Scanning...`
+
+**When Heavy Core appears (once):**
+```
+━━━━━━━━━━━━━━━━━━━━━━━
+  ⚠ HEAVY CORE DETECTED!
+━━━━━━━━━━━━━━━━━━━━━━━
+  ✔ Vault clicked!
