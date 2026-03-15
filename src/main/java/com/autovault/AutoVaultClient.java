@@ -38,7 +38,6 @@ public class AutoVaultClient implements ClientModInitializer {
     private static boolean modEnabled = false;
     private static boolean hasInteractedThisCycle = false;
     private static String lastPreviewItemId = "";
-    private static String lastChatMessage = "";
 
     private static final List<Field[]> fieldPairs = new ArrayList<>();
     private static boolean reflectionInitialized = false;
@@ -56,11 +55,9 @@ public class AutoVaultClient implements ClientModInitializer {
         LOGGER.info("AutoVault ready! Press G to toggle ON/OFF.");
     }
 
-    private void chat(MinecraftClient client, String msg, Formatting color) {
-        if (msg.equals(lastChatMessage)) return;
-        lastChatMessage = msg;
+    private void actionBar(MinecraftClient client, String msg, Formatting color) {
         if (client.player != null) {
-            client.player.sendMessage(Text.literal("[AV] " + msg).formatted(color), false);
+            client.player.sendMessage(Text.literal("[AV] " + msg).formatted(color), true);
         }
     }
 
@@ -71,11 +68,10 @@ public class AutoVaultClient implements ClientModInitializer {
             modEnabled = !modEnabled;
             hasInteractedThisCycle = false;
             lastPreviewItemId = "";
-            lastChatMessage = "";
             if (modEnabled) {
-                chat(client, "AutoVault ON - look at a vault!", Formatting.GREEN);
+                actionBar(client, "ON", Formatting.GREEN);
             } else {
-                chat(client, "AutoVault OFF", Formatting.RED);
+                actionBar(client, "OFF", Formatting.RED);
             }
         }
 
@@ -97,14 +93,10 @@ public class AutoVaultClient implements ClientModInitializer {
             return;
         }
 
-        chat(client, "Looking at vault at " + targetPos.toShortString(), Formatting.AQUA);
-
         if (!reflectionInitialized) initReflection(vault);
 
         ItemStack previewItem = getVaultDisplayItem(vault);
-        String currentId = (previewItem == null || previewItem.isEmpty()) ? "EMPTY" : previewItem.getItem().toString();
-
-        chat(client, "Vault preview: " + currentId, Formatting.YELLOW);
+        String currentId = (previewItem == null || previewItem.isEmpty()) ? "" : previewItem.getItem().toString();
 
         if (previewItem == null || previewItem.isEmpty()) {
             resetCycleIfNeeded("");
@@ -112,24 +104,23 @@ public class AutoVaultClient implements ClientModInitializer {
         }
 
         if (!previewItem.isOf(Items.HEAVY_CORE)) {
-            chat(client, "Not Heavy Core (" + currentId + ")", Formatting.GRAY);
             resetCycleIfNeeded(currentId);
             return;
         }
 
-        chat(client, "HEAVY CORE DETECTED!", Formatting.GOLD);
-
+        // Heavy Core detected
         if (hasInteractedThisCycle && currentId.equals(lastPreviewItemId)) {
-            chat(client, "Already interacted this cycle", Formatting.DARK_GRAY);
+            actionBar(client, "Heavy Core detected - already clicked!", Formatting.GOLD);
             return;
         }
 
         if (!playerHasTrialKey(client)) {
-            chat(client, "No Ominous Trial Key in inventory!", Formatting.RED);
+            actionBar(client, "Heavy Core detected - no Ominous Key!", Formatting.RED);
             return;
         }
 
-        chat(client, "RIGHT CLICKING VAULT!", Formatting.GREEN);
+        // Fire!
+        actionBar(client, "Heavy Core - clicking vault!", Formatting.GREEN);
         LOGGER.info("AutoVault: Interacting with vault at {}", targetPos);
         client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, blockHit);
         hasInteractedThisCycle = true;
@@ -163,11 +154,9 @@ public class AutoVaultClient implements ClientModInitializer {
                 if (inner.getType().getSimpleName().equals("class_1799")
                         || inner.getType() == ItemStack.class) {
                     fieldPairs.add(new Field[]{outer, inner});
-                    LOGGER.info("AutoVault: Pair: {}.{}", outer.getName(), inner.getName());
                 }
             }
         }
-        LOGGER.info("AutoVault: {} pairs found", fieldPairs.size());
     }
 
     private boolean playerHasTrialKey(MinecraftClient client) {
