@@ -25,9 +25,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-import java.util.ArrayList;
-import java.util.List;
 
 @Environment(EnvType.CLIENT)
 public class AutoVaultClient implements ClientModInitializer {
@@ -40,10 +37,9 @@ public class AutoVaultClient implements ClientModInitializer {
     private static boolean hasInteractedThisCycle = false;
     private static String lastPreviewItemId = "";
 
-    private static final List<FieldMethodPair> candidates = new ArrayList<>();
+    private static Field sharedDataField = null;
+    private static Field displayItemField = null;
     private static boolean reflectionInitialized = false;
-
-    private record FieldMethodPair(Field field, Method method, String desc) {}
 
     @Override
     public void onInitializeClient() {
@@ -90,9 +86,7 @@ public class AutoVaultClient implements ClientModInitializer {
             resetCycleIfNeeded(""); return;
         }
 
-        if (!reflectionInitialized) {
-            initReflection(vault);
-        }
+        if (!reflectionInitialized) initReflection(vault);
 
         ItemStack previewItem = getVaultDisplayItem(vault);
 
@@ -106,7 +100,10 @@ public class AutoVaultClient implements ClientModInitializer {
 
         String currentItemId = previewItem.getItem().toString();
         if (hasInteractedThisCycle && currentItemId.equals(lastPreviewItemId)) return;
-        if (!playerHasTrialKey(client)) return;
+        if (!playerHasTrialKey(client)) {
+            LOGGER.info("AutoVault: Heavy Core detected but no Trial Key!");
+            return;
+        }
 
         LOGGER.info("AutoVault: Heavy Core at {}! Interacting.", targetPos);
         client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, blockHit);
@@ -115,69 +112,64 @@ public class AutoVaultClient implements ClientModInitializer {
     }
 
     private ItemStack getVaultDisplayItem(VaultBlockEntity vault) {
-        for (FieldMethodPair pair : candidates) {
-            try {
-                Object fieldValue = pair.field().get(vault);
-                if (fieldValue == null) continue;
-                Object result = pair.method().invoke(fieldValue);
-                if (result instanceof ItemStack stack && !stack.isEmpty()) {
-                    return stack;
-                }
-            } catch (Exception ignored) {}
+        try {
+            if (sharedDataField == null || displayItemField == null) return ItemStack.EMPTY;
+            Object sharedData = sharedDataField.get(vault);
+            if (sharedData == null) return ItemStack.EMPTY;
+            Object item = displayItemField.get(sharedData);
+            if (item instanceof ItemStack stack) return stack;
+        } catch (Exception e) {
+            LOGGER.warn("AutoVault: Failed to read display item: {}", e.getMessage());
         }
         return ItemStack.EMPTY;
     }
 
     private void initReflection(VaultBlockEntity vault) {
         reflectionInitialized = true;
-        LOGGER.info("AutoVault: Scanning ALL VaultBlockEntity fields for ItemStack getters...");
-
-        Field[] fields = VaultBlockEntity.class.getDeclaredFields();
-        LOGGER.info("AutoVault: {} declared fields total", fields.length);
-
-        for (Field field : fields) {
-            field.setAccessible(true);
-            Object value = null;
-            try { value = field.get(vault); } catch (Exception ignored) {}
-
-            LOGGER.info("AutoVault: Checking field='{}' type='{}' value='{}'",
-                    field.getName(), field.getType().getSimpleName(),
-                    value == null ? "null" : value.getClass().getSimpleName());
-
-            if (value == null) continue;
-
-            for (Method method : value.getClass().getDeclaredMethods()) {
-                method.setAccessible(true);
-                if (method.getParameterCount() == 0 && method.getReturnType() == ItemStack.class) {
-                    LOGGER.info("AutoVault: + declared method '{}' on field '{}'", method.getName(), field.getName());
-                    candidates.add(new FieldMethodPair(field, method, field.getName() + "." + method.getName()));
-                }
+        try {
+            sharedDataField = VaultBlockEntity.class.getDeclaredField("field_48867");
+            sharedDataField.setAccessible(true);
+            Object sharedData = sharedDataField.get(vault);
+            if (sharedData == null) {
+                LOGGER.warn("AutoVault: sharedData is null, trying fallback...");
+                initReflectionFallback(vault);
+                return;
             }
-            for (Method method : value.getClass().getMethods()) {
-                if (method.getParameterCount() == 0 && method.getReturnType() == ItemStack.class) {
-                    boolean alreadyAdded = candidates.stream().anyMatch(
-                            p -> p.field() == field && p.method().getName().equals(method.getName()));
-                    if (!alreadyAdded) {
-                        LOGGER.info("AutoVault: + public method '{}' on field '{}'", method.getName(), field.getName());
-                        candidates.add(new FieldMethodPair(field, method, field.getName() + "." + method.getName()));
+            displayItemField = sharedData.getClass().getDeclaredField("field_48896");
+            displayItemField.setAccessible(true);
+            LOGGER.info("AutoVault: Reflection ready! Watching {}.field_48896 for Heavy Core.",
+                    sharedData.getClass().getSimpleName());
+        } catch (NoSuchFieldException e) {
+            LOGGER.warn("AutoVault: Hardcoded field not found ({}), trying fallback...", e.getMessage());
+            initReflectionFallback(vault);
+        } catch (Exception e) {
+            LOGGER.warn("AutoVault: Reflection init failed: {}", e.getMessage());
+        }
+    }
+
+    private void initReflectionFallback(VaultBlockEntity vault) {
+        try {
+            for (Field field : VaultBlockEntity.class.getDeclaredFields()) {
+                field.setAccessible(true);
+                Object value = null;
+                try { value = field.get(vault); } catch (Exception ignored) {}
+                if (value == null) continue;
+                if (value.getClass().getSimpleName().contains("Logger")) continue;
+                for (Field inner : value.getClass().getDeclaredFields()) {
+                    inner.setAccessible(true);
+                    if (inner.getType().getSimpleName().equals("class_1799")
+                            || inner.getType() == ItemStack.class) {
+                        sharedDataField = field;
+                        displayItemField = inner;
+                        LOGGER.info("AutoVault: Fallback resolved: {}.{}", field.getName(), inner.getName());
+                        return;
                     }
                 }
             }
-
-            for (Field innerField : value.getClass().getDeclaredFields()) {
-                innerField.setAccessible(true);
-                Object innerValue = null;
-                try { innerValue = innerField.get(value); } catch (Exception ignored) {}
-                if (innerValue == null) continue;
-                LOGGER.info("AutoVault:   inner field='{}' type='{}' value='{}'",
-                        innerField.getName(), innerField.getType().getSimpleName(),
-                        innerValue.getClass().getSimpleName());
-                if (innerValue instanceof ItemStack) {
-                    LOGGER.info("AutoVault:   -> direct ItemStack field: {}.{}", field.getName(), innerField.getName());
-                }
-            }
+            LOGGER.warn("AutoVault: Could not find display item field. Vault detection disabled.");
+        } catch (Exception e) {
+            LOGGER.warn("AutoVault: Fallback error: {}", e.getMessage());
         }
-        LOGGER.info("AutoVault: Found {} total candidates", candidates.size());
     }
 
     private boolean playerHasTrialKey(MinecraftClient client) {
