@@ -38,12 +38,8 @@ public class AutoVaultClient implements ClientModInitializer {
     private static boolean modEnabled = false;
     private static boolean hasInteractedThisCycle = false;
     private static String lastPreviewItemId = "";
-
-    // Action bar animation
     private static int animTick = 0;
     private static final String[] DOTS = {"   ", ".  ", ".. ", "..."};
-
-    // One-time chat flags
     private static boolean sentVaultMessage = false;
     private static boolean sentHeavyCoreMessage = false;
     private static BlockPos lastVaultPos = null;
@@ -89,14 +85,14 @@ public class AutoVaultClient implements ClientModInitializer {
             sentHeavyCoreMessage = false;
             lastVaultPos = null;
             if (modEnabled) {
-                chat(client, "━━━━━━━━━━━━━━━━━━━━━━━", Formatting.DARK_AQUA);
-                chat(client, "  AutoVault » ON", Formatting.GREEN);
+                chat(client, "---------------------", Formatting.DARK_AQUA);
+                chat(client, "  AutoVault > ON", Formatting.GREEN);
                 chat(client, "  Look at an Ominous Vault!", Formatting.GRAY);
-                chat(client, "━━━━━━━━━━━━━━━━━━━━━━━", Formatting.DARK_AQUA);
+                chat(client, "---------------------", Formatting.DARK_AQUA);
             } else {
-                chat(client, "━━━━━━━━━━━━━━━━━━━━━━━", Formatting.DARK_AQUA);
-                chat(client, "  AutoVault » OFF", Formatting.RED);
-                chat(client, "━━━━━━━━━━━━━━━━━━━━━━━", Formatting.DARK_AQUA);
+                chat(client, "---------------------", Formatting.DARK_AQUA);
+                chat(client, "  AutoVault > OFF", Formatting.RED);
+                chat(client, "---------------------", Formatting.DARK_AQUA);
             }
         }
 
@@ -104,7 +100,6 @@ public class AutoVaultClient implements ClientModInitializer {
 
         HitResult hitResult = client.crosshairTarget;
         if (hitResult == null || hitResult.getType() != HitResult.Type.BLOCK) {
-            // Reset when not looking at vault
             if (sentVaultMessage) {
                 sentVaultMessage = false;
                 sentHeavyCoreMessage = false;
@@ -129,15 +124,14 @@ public class AutoVaultClient implements ClientModInitializer {
             return;
         }
 
-        // Send "Looking at vault" message only once per new vault
         if (!sentVaultMessage || !targetPos.equals(lastVaultPos)) {
             sentVaultMessage = true;
             sentHeavyCoreMessage = false;
             lastVaultPos = targetPos;
-            chat(client, "━━━━━━━━━━━━━━━━━━━━━━━", Formatting.DARK_GRAY);
-            chat(client, "  AutoVault » Looking at vault" , Formatting.AQUA);
-            chat(client, "  Scanning preview items" + DOTS[animTick / 5 % 4], Formatting.GRAY);
-            chat(client, "━━━━━━━━━━━━━━━━━━━━━━━", Formatting.DARK_GRAY);
+            chat(client, "---------------------", Formatting.DARK_GRAY);
+            chat(client, "  AutoVault > Looking at vault", Formatting.AQUA);
+            chat(client, "  Scanning preview items...", Formatting.GRAY);
+            chat(client, "---------------------", Formatting.DARK_GRAY);
         }
 
         if (!reflectionInitialized) initReflection(vault);
@@ -145,9 +139,8 @@ public class AutoVaultClient implements ClientModInitializer {
         ItemStack previewItem = getVaultDisplayItem(vault);
         String currentId = (previewItem == null || previewItem.isEmpty()) ? "" : previewItem.getItem().toString();
 
-        // Animated action bar while scanning
         String dot = DOTS[animTick / 5 % 4];
-        actionBar(client, "⬡ AutoVault » Scanning" + dot, Formatting.AQUA);
+        actionBar(client, "[ AutoVault ] Scanning" + dot, Formatting.AQUA);
 
         if (previewItem == null || previewItem.isEmpty()) {
             resetCycleIfNeeded("");
@@ -159,27 +152,25 @@ public class AutoVaultClient implements ClientModInitializer {
             return;
         }
 
-        // Heavy Core — send chat once
         if (!sentHeavyCoreMessage) {
             sentHeavyCoreMessage = true;
-            chat(client, "━━━━━━━━━━━━━━━━━━━━━━━", Formatting.GOLD);
-            chat(client, "  ⚠ HEAVY CORE DETECTED!", Formatting.GOLD);
-            chat(client, "━━━━━━━━━━━━━━━━━━━━━━━", Formatting.GOLD);
+            chat(client, "---------------------", Formatting.GOLD);
+            chat(client, "  !! HEAVY CORE DETECTED !!", Formatting.GOLD);
+            chat(client, "---------------------", Formatting.GOLD);
         }
 
         if (hasInteractedThisCycle && currentId.equals(lastPreviewItemId)) {
-            actionBar(client, "⬡ AutoVault » Already clicked this cycle!", Formatting.GOLD);
+            actionBar(client, "[ AutoVault ] Already clicked this cycle!", Formatting.GOLD);
             return;
         }
 
         if (!playerHasTrialKey(client)) {
-            actionBar(client, "⬡ AutoVault » No Ominous Key!", Formatting.RED);
+            actionBar(client, "[ AutoVault ] No Ominous Key!", Formatting.RED);
             return;
         }
 
-        // Fire!
-        actionBar(client, "⬡ AutoVault » Clicking vault!", Formatting.GREEN);
-        chat(client, "  ✔ Vault clicked!", Formatting.GREEN);
+        actionBar(client, "[ AutoVault ] Clicking vault!", Formatting.GREEN);
+        chat(client, "  > Vault clicked!", Formatting.GREEN);
         LOGGER.info("AutoVault: Interacting with vault at {}", targetPos);
         client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, blockHit);
         hasInteractedThisCycle = true;
@@ -237,33 +228,3 @@ public class AutoVaultClient implements ClientModInitializer {
         }
     }
 }
-```
-
-Commit → ✅ → download jar.
-
-Here's what you'll see:
-
-**When you press G:**
-```
-━━━━━━━━━━━━━━━━━━━━━━━
-  AutoVault » ON
-  Look at an Ominous Vault!
-━━━━━━━━━━━━━━━━━━━━━━━
-```
-
-**When you look at a vault (once):**
-```
-━━━━━━━━━━━━━━━━━━━━━━━
-  AutoVault » Looking at vault
-  Scanning preview items...
-━━━━━━━━━━━━━━━━━━━━━━━
-```
-
-**Action bar animates:** `⬡ AutoVault » Scanning...`
-
-**When Heavy Core appears (once):**
-```
-━━━━━━━━━━━━━━━━━━━━━━━
-  ⚠ HEAVY CORE DETECTED!
-━━━━━━━━━━━━━━━━━━━━━━━
-  ✔ Vault clicked!
