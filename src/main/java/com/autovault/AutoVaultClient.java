@@ -57,7 +57,7 @@ public class AutoVaultClient implements ClientModInitializer {
     }
 
     private void chat(MinecraftClient client, String msg, Formatting color) {
-        if (msg.equals(lastChatMessage)) return; // avoid spam
+        if (msg.equals(lastChatMessage)) return;
         lastChatMessage = msg;
         if (client.player != null) {
             client.player.sendMessage(Text.literal("[AV] " + msg).formatted(color), false);
@@ -81,7 +81,6 @@ public class AutoVaultClient implements ClientModInitializer {
 
         if (!modEnabled) return;
 
-        // Step 1: crosshair check
         HitResult hitResult = client.crosshairTarget;
         if (hitResult == null || hitResult.getType() != HitResult.Type.BLOCK) {
             resetCycleIfNeeded("");
@@ -92,19 +91,16 @@ public class AutoVaultClient implements ClientModInitializer {
         BlockPos targetPos = blockHit.getBlockPos();
         World world = client.world;
 
-        // Step 2: vault check
         BlockEntity blockEntity = world.getBlockEntity(targetPos);
         if (!(blockEntity instanceof VaultBlockEntity vault)) {
             resetCycleIfNeeded("");
             return;
         }
 
-        // We're looking at a vault — show it
         chat(client, "Looking at vault at " + targetPos.toShortString(), Formatting.AQUA);
 
         if (!reflectionInitialized) initReflection(vault);
 
-        // Step 3: read preview item
         ItemStack previewItem = getVaultDisplayItem(vault);
         String currentId = (previewItem == null || previewItem.isEmpty()) ? "EMPTY" : previewItem.getItem().toString();
 
@@ -115,7 +111,6 @@ public class AutoVaultClient implements ClientModInitializer {
             return;
         }
 
-        // Step 4: is it Heavy Core?
         if (!previewItem.isOf(Items.HEAVY_CORE)) {
             chat(client, "Not Heavy Core (" + currentId + ")", Formatting.GRAY);
             resetCycleIfNeeded(currentId);
@@ -129,13 +124,11 @@ public class AutoVaultClient implements ClientModInitializer {
             return;
         }
 
-        // Step 5: trial key check
         if (!playerHasTrialKey(client)) {
-            chat(client, "No Trial Key in inventory!", Formatting.RED);
+            chat(client, "No Ominous Trial Key in inventory!", Formatting.RED);
             return;
         }
 
-        // Step 6: interact!
         chat(client, "RIGHT CLICKING VAULT!", Formatting.GREEN);
         LOGGER.info("AutoVault: Interacting with vault at {}", targetPos);
         client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, blockHit);
@@ -182,7 +175,9 @@ public class AutoVaultClient implements ClientModInitializer {
         PlayerInventory inventory = client.player.getInventory();
         for (int i = 0; i < inventory.size(); i++) {
             ItemStack stack = inventory.getStack(i);
-            if (!stack.isEmpty() && stack.isOf(Items.TRIAL_KEY)) return true;
+            if (!stack.isEmpty() && (stack.isOf(Items.TRIAL_KEY) || stack.isOf(Items.OMINOUS_TRIAL_KEY))) {
+                return true;
+            }
         }
         return false;
     }
