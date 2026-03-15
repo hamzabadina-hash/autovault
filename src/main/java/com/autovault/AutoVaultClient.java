@@ -152,4 +152,55 @@ public class AutoVaultClient implements ClientModInitializer {
 
             // Check declared methods (catches obfuscated names like method_XXXXX)
             for (Method method : value.getClass().getDeclaredMethods()) {
-                m
+                method.setAccessible(true);
+                if (method.getParameterCount() == 0 && method.getReturnType() == ItemStack.class) {
+                    LOGGER.info("AutoVault: Candidate found - field='{}' method='{}'", field.getName(), method.getName());
+                    sharedDataField = field;
+                    getDisplayItemMethod = method;
+                    return;
+                }
+            }
+            // Also check inherited public methods
+            for (Method method : value.getClass().getMethods()) {
+                if (method.getParameterCount() == 0 && method.getReturnType() == ItemStack.class) {
+                    LOGGER.info("AutoVault: Public candidate - field='{}' method='{}'", field.getName(), method.getName());
+                    sharedDataField = field;
+                    getDisplayItemMethod = method;
+                    return;
+                }
+            }
+        }
+
+        // Fallback: direct methods on VaultBlockEntity
+        LOGGER.info("AutoVault: Trying direct VaultBlockEntity methods...");
+        directItemStackMethods = new ArrayList<>();
+        for (Method method : VaultBlockEntity.class.getDeclaredMethods()) {
+            method.setAccessible(true);
+            if (method.getParameterCount() == 0 && method.getReturnType() == ItemStack.class) {
+                directItemStackMethods.add(method);
+                LOGGER.info("AutoVault: Direct method: '{}'", method.getName());
+            }
+        }
+
+        if (sharedDataField == null && directItemStackMethods.isEmpty()) {
+            LOGGER.warn("AutoVault: No ItemStack getter found! Preview detection disabled.");
+        }
+    }
+
+    private boolean playerHasTrialKey(MinecraftClient client) {
+        if (client.player == null) return false;
+        PlayerInventory inventory = client.player.getInventory();
+        for (int i = 0; i < inventory.size(); i++) {
+            ItemStack stack = inventory.getStack(i);
+            if (!stack.isEmpty() && stack.isOf(Items.TRIAL_KEY)) return true;
+        }
+        return false;
+    }
+
+    private void resetCycleIfNeeded(String currentItemId) {
+        if (!currentItemId.equals(lastPreviewItemId)) {
+            hasInteractedThisCycle = false;
+            lastPreviewItemId = currentItemId;
+        }
+    }
+}
