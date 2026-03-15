@@ -26,6 +26,8 @@ import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
 
 @Environment(EnvType.CLIENT)
 public class AutoVaultClient implements ClientModInitializer {
@@ -41,6 +43,7 @@ public class AutoVaultClient implements ClientModInitializer {
     private static Field sharedDataField = null;
     private static Method getDisplayItemMethod = null;
     private static boolean reflectionInitialized = false;
+    private static List<Method> directItemStackMethods = null;
 
     @Override
     public void onInitializeClient() {
@@ -87,7 +90,7 @@ public class AutoVaultClient implements ClientModInitializer {
             resetCycleIfNeeded(""); return;
         }
 
-        ItemStack previewItem = getVaultDisplayItemSafely(vault);
+        ItemStack previewItem = getVaultDisplayItem(vault);
         if (previewItem == null || previewItem.isEmpty()) {
             resetCycleIfNeeded(""); return;
         }
@@ -106,83 +109,47 @@ public class AutoVaultClient implements ClientModInitializer {
         lastPreviewItemId = currentItemId;
     }
 
-    private ItemStack getVaultDisplayItemSafely(VaultBlockEntity vault) {
-        try {
-            if (!reflectionInitialized) initReflection(vault);
-            if (sharedDataField == null || getDisplayItemMethod == null) return ItemStack.EMPTY;
-            Object sharedData = sharedDataField.get(vault);
-            if (sharedData == null) return ItemStack.EMPTY;
-            Object result = getDisplayItemMethod.invoke(sharedData);
-            if (result instanceof ItemStack stack) return stack;
-            return ItemStack.EMPTY;
-        } catch (Exception e) {
-            return ItemStack.EMPTY;
+    private ItemStack getVaultDisplayItem(VaultBlockEntity vault) {
+        if (!reflectionInitialized) initReflection(vault);
+
+        if (sharedDataField != null && getDisplayItemMethod != null) {
+            try {
+                Object sharedData = sharedDataField.get(vault);
+                if (sharedData != null) {
+                    Object result = getDisplayItemMethod.invoke(sharedData);
+                    if (result instanceof ItemStack stack && !stack.isEmpty()) return stack;
+                }
+            } catch (Exception ignored) {}
         }
+
+        if (directItemStackMethods != null) {
+            for (Method m : directItemStackMethods) {
+                try {
+                    Object result = m.invoke(vault);
+                    if (result instanceof ItemStack stack && !stack.isEmpty()) return stack;
+                } catch (Exception ignored) {}
+            }
+        }
+
+        return ItemStack.EMPTY;
     }
 
     private void initReflection(VaultBlockEntity vault) {
         reflectionInitialized = true;
-        try {
-            for (Field field : VaultBlockEntity.class.getDeclaredFields()) {
-                field.setAccessible(true);
-                Object value = null;
-                try { value = field.get(vault); } catch (Exception ignored) {}
-                if (value == null) continue;
-                for (Method method : value.getClass().getMethods()) {
-                    if (method.getParameterCount() == 0
-                            && method.getReturnType() == ItemStack.class
-                            && method.getName().toLowerCase().contains("display")) {
-                        sharedDataField = field;
-                        getDisplayItemMethod = method;
-                        LOGGER.info("AutoVault: Found via {}.{}", value.getClass().getSimpleName(), method.getName());
-                        return;
-                    }
-                }
-            }
-            for (String name : new String[]{"sharedData", "field_53026", "shared", "data"}) {
-                if (tryFieldByName(vault, name)) return;
-            }
-            LOGGER.warn("AutoVault: Could not locate vault preview field — mod will not crash but won't auto-interact.");
-        } catch (Exception e) {
-            LOGGER.warn("AutoVault: Reflection init error: {}", e.getMessage());
-        }
-    }
+        LOGGER.info("AutoVault: Scanning VaultBlockEntity fields...");
 
-    private boolean tryFieldByName(VaultBlockEntity vault, String name) {
-        try {
-            Field field = VaultBlockEntity.class.getDeclaredField(name);
+        Field[] fields = VaultBlockEntity.class.getDeclaredFields();
+        LOGGER.info("AutoVault: {} declared fields found", fields.length);
+
+        for (Field field : fields) {
             field.setAccessible(true);
-            Object value = field.get(vault);
-            if (value == null) return false;
-            for (Method method : value.getClass().getMethods()) {
-                if (method.getParameterCount() == 0 && method.getReturnType() == ItemStack.class) {
-                    sharedDataField = field;
-                    getDisplayItemMethod = method;
-                    LOGGER.info("AutoVault: Resolved via field '{}' method '{}'", name, method.getName());
-                    return true;
-                }
-            }
-        } catch (NoSuchFieldException ignored) {
-        } catch (Exception e) {
-            LOGGER.warn("AutoVault: tryFieldByName('{}') error: {}", name, e.getMessage());
-        }
-        return false;
-    }
+            Object value = null;
+            try { value = field.get(vault); } catch (Exception ignored) {}
+            LOGGER.info("AutoVault: field='{}' type='{}' value='{}'",
+                    field.getName(), field.getType().getSimpleName(),
+                    value == null ? "null" : value.getClass().getSimpleName());
+            if (value == null) continue;
 
-    private boolean playerHasTrialKey(MinecraftClient client) {
-        if (client.player == null) return false;
-        PlayerInventory inventory = client.player.getInventory();
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
-            if (!stack.isEmpty() && stack.isOf(Items.TRIAL_KEY)) return true;
-        }
-        return false;
-    }
-
-    private void resetCycleIfNeeded(String currentItemId) {
-        if (!currentItemId.equals(lastPreviewItemId)) {
-            hasInteractedThisCycle = false;
-            lastPreviewItemId = currentItemId;
-        }
-    }
-}
+            // Check declared methods (catches obfuscated names like method_XXXXX)
+            for (Method method : value.getClass().getDeclaredMethods()) {
+                m
