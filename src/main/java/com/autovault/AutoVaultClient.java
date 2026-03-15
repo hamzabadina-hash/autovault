@@ -38,8 +38,8 @@ public class AutoVaultClient implements ClientModInitializer {
     private static boolean modEnabled = false;
     private static boolean hasInteractedThisCycle = false;
     private static String lastPreviewItemId = "";
+    private static String lastChatMessage = "";
 
-    // Each entry: [outerField, innerField] — we try all of them
     private static final List<Field[]> fieldPairs = new ArrayList<>();
     private static boolean reflectionInitialized = false;
 
@@ -56,6 +56,14 @@ public class AutoVaultClient implements ClientModInitializer {
         LOGGER.info("AutoVault ready! Press G to toggle ON/OFF.");
     }
 
+    private void chat(MinecraftClient client, String msg, Formatting color) {
+        if (msg.equals(lastChatMessage)) return; // avoid spam
+        lastChatMessage = msg;
+        if (client.player != null) {
+            client.player.sendMessage(Text.literal("[AV] " + msg).formatted(color), false);
+        }
+    }
+
     private void onClientTick(MinecraftClient client) {
         if (client.player == null || client.world == null) return;
 
@@ -63,56 +71,73 @@ public class AutoVaultClient implements ClientModInitializer {
             modEnabled = !modEnabled;
             hasInteractedThisCycle = false;
             lastPreviewItemId = "";
+            lastChatMessage = "";
             if (modEnabled) {
-                client.player.sendMessage(Text.literal("AutoVault: ON").formatted(Formatting.GREEN), true);
-                LOGGER.info("AutoVault enabled.");
+                chat(client, "AutoVault ON - look at a vault!", Formatting.GREEN);
             } else {
-                client.player.sendMessage(Text.literal("AutoVault: OFF").formatted(Formatting.RED), true);
-                LOGGER.info("AutoVault disabled.");
+                chat(client, "AutoVault OFF", Formatting.RED);
             }
         }
 
         if (!modEnabled) return;
 
+        // Step 1: crosshair check
         HitResult hitResult = client.crosshairTarget;
         if (hitResult == null || hitResult.getType() != HitResult.Type.BLOCK) {
-            resetCycleIfNeeded(""); return;
+            resetCycleIfNeeded("");
+            return;
         }
 
         BlockHitResult blockHit = (BlockHitResult) hitResult;
         BlockPos targetPos = blockHit.getBlockPos();
         World world = client.world;
 
+        // Step 2: vault check
         BlockEntity blockEntity = world.getBlockEntity(targetPos);
         if (!(blockEntity instanceof VaultBlockEntity vault)) {
-            resetCycleIfNeeded(""); return;
-        }
-
-        if (!reflectionInitialized) initReflection(vault);
-
-        ItemStack previewItem = getVaultDisplayItem(vault);
-
-        // Log every non-empty item we find (only once per change)
-        String currentId = previewItem == null || previewItem.isEmpty() ? "" : previewItem.getItem().toString();
-        if (!currentId.isEmpty() && !currentId.equals(lastPreviewItemId)) {
-            LOGGER.info("AutoVault: Vault preview changed to: {}", currentId);
-        }
-
-        if (previewItem == null || previewItem.isEmpty()) {
-            resetCycleIfNeeded(""); return;
-        }
-
-        if (!previewItem.isOf(Items.HEAVY_CORE)) {
-            resetCycleIfNeeded(currentId); return;
-        }
-
-        if (hasInteractedThisCycle && currentId.equals(lastPreviewItemId)) return;
-        if (!playerHasTrialKey(client)) {
-            LOGGER.info("AutoVault: Heavy Core detected but no Trial Key!");
+            resetCycleIfNeeded("");
             return;
         }
 
-        LOGGER.info("AutoVault: Heavy Core at {}! Interacting.", targetPos);
+        // We're looking at a vault — show it
+        chat(client, "Looking at vault at " + targetPos.toShortString(), Formatting.AQUA);
+
+        if (!reflectionInitialized) initReflection(vault);
+
+        // Step 3: read preview item
+        ItemStack previewItem = getVaultDisplayItem(vault);
+        String currentId = (previewItem == null || previewItem.isEmpty()) ? "EMPTY" : previewItem.getItem().toString();
+
+        chat(client, "Vault preview: " + currentId, Formatting.YELLOW);
+
+        if (previewItem == null || previewItem.isEmpty()) {
+            resetCycleIfNeeded("");
+            return;
+        }
+
+        // Step 4: is it Heavy Core?
+        if (!previewItem.isOf(Items.HEAVY_CORE)) {
+            chat(client, "Not Heavy Core (" + currentId + ")", Formatting.GRAY);
+            resetCycleIfNeeded(currentId);
+            return;
+        }
+
+        chat(client, "HEAVY CORE DETECTED!", Formatting.GOLD);
+
+        if (hasInteractedThisCycle && currentId.equals(lastPreviewItemId)) {
+            chat(client, "Already interacted this cycle", Formatting.DARK_GRAY);
+            return;
+        }
+
+        // Step 5: trial key check
+        if (!playerHasTrialKey(client)) {
+            chat(client, "No Trial Key in inventory!", Formatting.RED);
+            return;
+        }
+
+        // Step 6: interact!
+        chat(client, "RIGHT CLICKING VAULT!", Formatting.GREEN);
+        LOGGER.info("AutoVault: Interacting with vault at {}", targetPos);
         client.interactionManager.interactBlock(client.player, Hand.MAIN_HAND, blockHit);
         hasInteractedThisCycle = true;
         lastPreviewItemId = currentId;
@@ -134,32 +159,22 @@ public class AutoVaultClient implements ClientModInitializer {
 
     private void initReflection(VaultBlockEntity vault) {
         reflectionInitialized = true;
-        LOGGER.info("AutoVault: Initializing reflection - trying ALL field pairs...");
-
-        // Try every known field on VaultBlockEntity
-        Field[] outerFields = VaultBlockEntity.class.getDeclaredFields();
-        for (Field outer : outerFields) {
+        for (Field outer : VaultBlockEntity.class.getDeclaredFields()) {
             outer.setAccessible(true);
             Object outerVal = null;
             try { outerVal = outer.get(vault); } catch (Exception ignored) {}
             if (outerVal == null) continue;
             if (outerVal.getClass().getSimpleName().contains("Logger")) continue;
-
-            // Try every field on that object
             for (Field inner : outerVal.getClass().getDeclaredFields()) {
                 inner.setAccessible(true);
-                // Check if this field IS an ItemStack type
                 if (inner.getType().getSimpleName().equals("class_1799")
                         || inner.getType() == ItemStack.class) {
                     fieldPairs.add(new Field[]{outer, inner});
-                    LOGGER.info("AutoVault: Registered pair: {}.{} -> {}.{}",
-                            outer.getDeclaringClass().getSimpleName(), outer.getName(),
-                            outerVal.getClass().getSimpleName(), inner.getName());
+                    LOGGER.info("AutoVault: Pair: {}.{}", outer.getName(), inner.getName());
                 }
             }
         }
-
-        LOGGER.info("AutoVault: {} field pairs registered. Will try all of them each tick.", fieldPairs.size());
+        LOGGER.info("AutoVault: {} pairs found", fieldPairs.size());
     }
 
     private boolean playerHasTrialKey(MinecraftClient client) {
